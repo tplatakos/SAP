@@ -1,0 +1,335 @@
+*--------------------------------------*
+* Developer : Platakos Thodoris         *
+* Report    : ZMASS_EKSODA              *
+* Date      : 26.09.2024                *
+* Info - Quest Technologies SA          *
+*---------------------------------------*
+
+
+REPORT ZMASS_EKSODA  line-size 300 .
+
+TABLES: QMEL .
+
+***********************************************
+*        DATA - TYPES- PARAMETERS             *
+***********************************************
+
+TYPES : BEGIN OF EXCEL_T,
+          QMNUM        TYPE STRING,
+          ZZERGASIA    TYPE STRING,
+          ZZAPOSTASI   TYPE STRING,
+          ZZANALOSIMA  TYPE STRING,
+          ZZEKSODA     TYPE STRING,
+          ZZTIM        TYPE STRING.
+TYPES : END OF EXCEL_T.
+
+TYPES : BEGIN OF QMNUM_NOT_FOUND,
+          QMNUM        TYPE STRING.
+TYPES : END OF QMNUM_NOT_FOUND.
+
+TYPES : BEGIN OF ALV_T,
+          QMNUM        TYPE STRING,
+          ZZERGASIA    TYPE STRING,
+          ZZAPOSTASI   TYPE STRING,
+          ZZANALOSIMA  TYPE STRING,
+          ZZEKSODA     TYPE STRING,
+          ZZTIM        TYPE STRING,
+          COMMENT      TYPE STRING,
+          F_COLOR      TYPE SLIS_T_SPECIALCOL_ALV.
+TYPES : END OF ALV_T.
+
+DATA : LV_XLS_XSTR       TYPE          XSTRING.
+DATA : IV_FILE           TYPE          STRING.
+DATA : IR_DATA_REF       TYPE REF TO   DATA.
+DATA : LS_SHEET_EXCEL    TYPE TABLE OF EXCEL_T.
+DATA : WA_LS_SHEET_EXCEL TYPE          EXCEL_T.
+DATA : LS                TYPE TABLE OF QMNUM_NOT_FOUND.   "Notifications not found from Qmel table
+DATA : WA                TYPE          QMNUM_NOT_FOUND.
+DATA : REBUILD           TYPE          QMEL-QMNUM.
+DATA : MSG_G             TYPE          STRING.
+DATA : I_LOGS            TYPE TABLE OF ALV_T.
+DATA : W_LOGS            TYPE          ALV_T.
+
+DATA: IT_FLDCAT    TYPE SLIS_T_FIELDCAT_ALV.
+DATA: WA_FLDCAT    TYPE SLIS_FIELDCAT_ALV.
+DATA: W_LAYOUT     TYPE SLIS_LAYOUT_ALV.
+DATA: l_GRID_TITLE TYPE LVC_TITLE.
+DATA: GS_FIELD     TYPE SLIS_SPECIALCOL_ALV.
+
+PARAMETERS : LV_FILE TYPE STRING DEFAULT  '\\sapqdv\Devtst\IQ4528\mass_eksoda texnikou ged.xlsx'.
+
+***********************************************
+*        DATA - TYPES- PARAMETERS             *
+***********************************************
+
+INCLUDE ZSPBII00.
+
+***********************************************
+*             MAIN CODE                       *
+***********************************************
+START-OF-SELECTION.
+"write :  / sy-datum.
+"write :  / '**********************************************'.
+"WRITE : / MSG_G.
+PERFORM  GET_XLSX_DATA.
+PERFORM  CHECK_XLSX_DATA.
+PERFORM  DISPLAY_LOGS.
+
+
+***********************************************
+*             MAIN CODE                       *
+***********************************************
+
+
+
+
+***********************************************
+*           START - FORMS                     *
+***********************************************
+
+FORM GET_XLSX_DATA.  "GET_XLSX_DATA
+
+DATA: OB1   TYPE REF TO CX_ROOT.
+DATA: OB2   TYPE REF TO CX_ROOT.
+DATA: LINES TYPE        I.
+DATA: LV_ANSWER TYPE C LENGTH 1.
+
+OPEN DATASET LV_FILE FOR INPUT IN BINARY MODE.
+IF SY-SUBRC EQ 0.
+  READ DATASET LV_FILE INTO LV_XLS_XSTR.
+  IF SY-SUBRC NE 0.
+     MESSAGE 'READ ERROR' TYPE 'E'.
+  ENDIF.
+ELSE.
+    MESSAGE 'OPEN ERROR' TYPE 'E'.
+ENDIF.
+CLOSE DATASET LV_FILE.
+
+TRY .
+"CREATE OBJECT FOR CL_FDT_XL_SPREADSHEET
+DATA(LO_XLS) = NEW CL_FDT_XL_SPREADSHEET( DOCUMENT_NAME = IV_FILE
+                                          XDOCUMENT     = LV_XLS_XSTR ).
+
+  CATCH CX_FDT_EXCEL_CORE INTO OB1.
+ENDTRY .
+
+TRY.
+"GET WORK SHEETS
+LO_XLS->IF_FDT_DOC_SPREADSHEET~GET_WORKSHEET_NAMES(
+  IMPORTING
+    WORKSHEET_NAMES = DATA(LT_SHEETS) ).
+
+ CATCH CX_SY_REF_IS_INITIAL INTO OB2.
+ENDTRY .
+
+
+LOOP AT LT_SHEETS INTO DATA(LS_SHEET).
+  IR_DATA_REF = LO_XLS->IF_FDT_DOC_SPREADSHEET~GET_ITAB_FROM_WORKSHEET( LS_SHEET  ) .
+  ASSIGN IR_DATA_REF->* TO FIELD-SYMBOL(<LFS_DATA_TAB>).
+
+  LS_SHEET_EXCEL[] = <LFS_DATA_TAB>.
+  ENDLOOP.
+      CALL FUNCTION 'POPUP_TO_CONFIRM'
+      EXPORTING
+         titlebar        = 'Confirmation'
+         text_question   = 'Παρακαλώ ενημερώστε με έαν το αρχείο σας εμπεριέχει Κεφαλίδα  ( Header-Line ) !'
+         text_button_1   = 'Yes'
+         text_button_2   = 'No'
+      IMPORTING
+         answer          = lv_answer
+      EXCEPTIONS
+      OTHERS          = 1.
+
+    IF sy-subrc = 0.
+       IF lv_answer = '1'. " User clicked Yes
+          MESSAGE 'Επιλέξατε (Ναι) ,συνεπώς η πρώτη εγγραφή (γραμμή) του αρχείου σας δεν θα ληφθεί  υπόψιν στην καταχώρηση !' TYPE 'I'.
+          DELETE LS_SHEET_EXCEL INDEX 1.
+       ELSE.
+          MESSAGE 'Επιλέξατε (Όχι) ,συνεπώς η πρώτη εγγραφή (γραμμή) του αρχείου σας  θα ληφθεί υπόψιν στην καταχώρηση !' TYPE 'I'.
+       ENDIF.
+    ELSE.
+         MESSAGE 'Error displaying pop-up.' TYPE 'E'.
+    ENDIF.
+
+  DESCRIBE TABLE LS_SHEET_EXCEL LINES LINES.
+  IF LINES = 0.
+     MESSAGE 'To αρχείο που έχετε επιλέξει δεν υπάρχει ή είναι corrupted ή κενό !' TYPE 'E'.
+  ENDIF.
+ENDFORM.                   "GET_XLSX_DATA
+
+FORM CHECK_XLSX_DATA .   "CHECK_XLSX_DATA
+  DATA: LV_ANSWER TYPE C LENGTH 1.
+  DATA: MSG(250).
+  DATA: LINES TYPE I.
+  LOOP AT LS_SHEET_EXCEL INTO WA_LS_SHEET_EXCEL.
+    CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+            EXPORTING
+              INPUT  = WA_LS_SHEET_EXCEL-QMNUM
+            IMPORTING
+              OUTPUT = REBUILD.
+    SELECT SINGLE * FROM QMEL WHERE QMNUM = REBUILD.
+      IF SY-SUBRC = 0 .
+         CONTINUE.
+      ELSE .
+           WA-QMNUM = WA_LS_SHEET_EXCEL-QMNUM.
+           APPEND WA TO LS.
+           CLEAR WA.
+      ENDIF.
+  ENDLOOP.
+  DESCRIBE TABLE LS LINES LINES.
+  IF LINES >= 1.
+    CALL FUNCTION 'POPUP_TO_CONFIRM'
+      EXPORTING
+         titlebar        = 'Confirmation'
+         text_question   = 'Yπάρχουν Notifications  που δέν έχουν καταχωρηθεί ,ώστε να ενημερωθούν τα έξοδα τεχνικού! Θέλετε να συνεχίσετε ; Θα ακολουθήσει σχετικό μήνυμα για όσα δεν ενημερώθηκαν ! '
+         text_button_1   = 'Yes'
+         text_button_2   = 'No'
+      IMPORTING
+         answer          = lv_answer
+      EXCEPTIONS
+      OTHERS          = 1.
+
+    IF sy-subrc = 0.
+       IF lv_answer = '1'. " User clicked Yes
+          LOOP AT LS_SHEET_EXCEL INTO WA_LS_SHEET_EXCEL WHERE QMNUM <> '' .
+               PERFORM  UPDATE_NOTIFICATION.
+          ENDLOOP.
+       ELSE.
+          MESSAGE 'Επιλέξατε η διαδικασία να διακοπεί!' TYPE 'E'.
+       ENDIF.
+    ELSE.
+         MESSAGE 'Error displaying pop-up.' TYPE 'E'.
+    ENDIF.
+
+    ELSEIF LINES = 0.
+       LOOP AT LS_SHEET_EXCEL INTO WA_LS_SHEET_EXCEL WHERE QMNUM <> '' .
+               PERFORM  UPDATE_NOTIFICATION.
+       ENDLOOP.
+
+  ENDIF.
+ENDFORM.  "CHECK_XLSX_DATA
+
+FORM UPDATE_NOTIFICATION.   "UPDATE_NOTIFICATION
+
+DATA: BEGIN OF MY_BDC OCCURS 100.
+        INCLUDE STRUCTURE BDCDATA.
+DATA: END OF MY_BDC.
+DATA : MESS LIKE HELP_INFO-MESSAGE.
+DATA : MSG TYPE string.
+
+PERFORM BDC_DYNPRO TABLES MY_BDC USING 'SAPLIQS0' '0100'.
+PERFORM BDC_FIELD TABLES MY_BDC USING 'BDC_CURSOR'
+                              'RIWO00-QMNUM'.
+PERFORM BDC_FIELD TABLES MY_BDC USING 'BDC_OKCODE'
+                              '/00'.
+PERFORM BDC_FIELD TABLES MY_BDC USING 'RIWO00-QMNUM'
+                              WA_LS_SHEET_EXCEL-QMNUM ."'300980613'.
+PERFORM BDC_DYNPRO TABLES MY_BDC USING 'SAPLIQS0' '7200'.
+PERFORM BDC_FIELD TABLES MY_BDC USING 'BDC_OKCODE'
+                              '=10\TAB02'.
+PERFORM BDC_FIELD TABLES MY_BDC USING 'BDC_CURSOR'
+                              'VIQMEL-QMTXT'.
+PERFORM BDC_DYNPRO TABLES MY_BDC USING'SAPLIQS0' '7200'.
+PERFORM BDC_FIELD TABLES MY_BDC USING 'BDC_OKCODE'
+                              '=BUCH'.
+PERFORM BDC_FIELD TABLES MY_BDC USING 'BDC_CURSOR'
+                              'VIQMEL-ZZTIM'.
+PERFORM BDC_FIELD TABLES MY_BDC USING 'VIQMEL-ZZERGASIA'
+                              WA_LS_SHEET_EXCEL-ZZERGASIA."'5111,00'.
+PERFORM BDC_FIELD TABLES MY_BDC USING 'VIQMEL-ZZTIM'
+                              WA_LS_SHEET_EXCEL-ZZTIM."'ΤΠΥ51'.
+PERFORM BDC_FIELD TABLES MY_BDC USING 'VIQMEL-ZZAPOSTASI'
+                              WA_LS_SHEET_EXCEL-ZZAPOSTASI."'5111,00'.
+PERFORM BDC_FIELD TABLES MY_BDC USING 'VIQMEL-ZZANALOSIMA'
+                             WA_LS_SHEET_EXCEL-ZZANALOSIMA ."'1111,00'.
+PERFORM BDC_FIELD TABLES MY_BDC USING 'VIQMEL-ZZEKSODA'
+                              WA_LS_SHEET_EXCEL-ZZEKSODA."'2.000'.
+
+CALL TRANSACTION 'IW52' USING MY_BDC MODE 'N' UPDATE 'S'.
+
+CALL FUNCTION 'ZSP_WRITE_MESSAGE'
+    EXPORTING
+      MSGID  = SY-MSGID
+      MSGNO  = SY-MSGNO
+      MSGV1  = SY-MSGV1
+      MSGV2  = SY-MSGV2
+      MSGV3  = SY-MSGV3
+      MSGV4  = SY-MSGV4
+    IMPORTING
+      MSGTXT = MESS
+    EXCEPTIONS
+      NOT_FOUND.
+    W_LOGS-QMNUM       =  WA_LS_SHEET_EXCEL-QMNUM.
+    W_LOGS-ZZERGASIA   =  WA_LS_SHEET_EXCEL-ZZERGASIA.
+    W_LOGS-ZZTIM       =  WA_LS_SHEET_EXCEL-ZZTIM.
+    W_LOGS-ZZAPOSTASI  =  WA_LS_SHEET_EXCEL-ZZAPOSTASI.
+    W_LOGS-ZZANALOSIMA =  WA_LS_SHEET_EXCEL-ZZANALOSIMA.
+    W_LOGS-ZZEKSODA    =  WA_LS_SHEET_EXCEL-ZZEKSODA.
+    W_LOGS-COMMENT     =  MESS.
+    IF MESS = ''.
+       W_LOGS-COMMENT = 'Έχετε ενημερώση το Notification νωρίτερα.Υπάρχουν ήδη περασμέςνες οι συγκεκριμένες τιμές στο Database.'.
+    ENDIF.
+    APPEND W_LOGS TO I_LOGS.
+    CLEAR W_LOGS.
+REFRESH MY_BDC[].
+ENDFORM.  "UPDATE_NOTIFICATION
+
+
+FORM DISPLAY_LOGS . "DISPLAY_LOGS
+  l_GRID_TITLE               = 'LOGS ΕΝΗΜΕΡΩΣΗΣ ΕΞΟΔΩΝ ΤΕΧΝΙΚΟΥ '.
+  "W_LAYOUT-ZEBRA             = 'X'.
+  "W_LAYOUT-COLWIDTH_OPTIMIZE = 'X'.
+  W_LAYOUT-COLTAB_FIELDNAME    = 'F_COLOR'.
+
+  LOOP AT I_LOGS INTO W_LOGS.
+    FIND 'saved' IN W_LOGS-COMMENT.
+    IF SY-SUBRC = 0 .
+      CONTINUE.
+    ELSE.
+      GS_FIELD-FIELDNAME = 'COMMENT'.
+      GS_FIELD-COLOR-COL = 6.
+      APPEND GS_FIELD TO W_LOGS-F_COLOR.
+      MODIFY I_LOGS FROM W_LOGS.
+    ENDIF.
+  ENDLOOP.
+
+  PERFORM CREATE_FLDCAT USING 'QMNUM'           'I_LOGS'       'Notifiation'                          10       1.
+  PERFORM CREATE_FLDCAT USING 'ZZERGASIA'       'I_LOGS'       'ΕΡΓΑΣΙΑ'                              10       2.
+  PERFORM CREATE_FLDCAT USING 'ZZTIM'           'I_LOGS'       'ΤΙΜΟΛΟΓΙΟ'                            10       3.
+  PERFORM CREATE_FLDCAT USING 'ZZAPOSTASI'      'I_LOGS'       'ΑΠΟΣΤΑΣΗ'                             10       4.
+  PERFORM CREATE_FLDCAT USING 'ZZANALOSIMA'     'I_LOGS'       'ΑΝΑΛΩΣΙΜΑ'                            10       5.
+  PERFORM CREATE_FLDCAT USING 'COMMENT'         'I_LOGS'       'LOG ΕΝΗΜΕΡΩΣΗΣ ΕΞΟΔΩΝ ΤΕΧΝΙΚΟΥ'       75       6.
+
+
+    CALL FUNCTION 'REUSE_ALV_GRID_DISPLAY'
+    EXPORTING
+      I_CALLBACK_PROGRAM      = SY-REPID
+      IT_FIELDCAT             = IT_FLDCAT
+      is_layout               = W_LAYOUT
+      "i_callback_user_command = 'USER_COMMAND'
+      I_GRID_TITLE            = l_GRID_TITLE
+    TABLES
+      T_OUTTAB                = I_LOGS.
+
+  IF SY-SUBRC <> 0.
+    MESSAGE 'ALV_DISPLAY_ERROR' TYPE 'I'.
+  ENDIF.
+
+ENDFORM. "DISPLAY_LOGS
+
+
+
+FORM CREATE_FLDCAT  USING    FIELDNAME TABNAME TEXT   OUTPUTLEN POSITION. "CREATE_FLDCAT
+
+  CLEAR WA_FLDCAT.
+  WA_FLDCAT-FIELDNAME  = FIELDNAME.
+  WA_FLDCAT-TABNAME    = TABNAME.
+  WA_FLDCAT-SELTEXT_L  = TEXT.
+  WA_FLDCAT-COL_POS    = POSITION.
+  WA_FLDCAT-OUTPUTLEN    = OUTPUTLEN.
+  APPEND WA_FLDCAT TO IT_FLDCAT.
+
+ENDFORM.   "CREATE_FLDCAT
+***********************************************
+*        END - FORMS                          *
+***********************************************
